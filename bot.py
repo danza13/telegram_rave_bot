@@ -54,13 +54,13 @@ if not os.path.exists("credentials.json"):
         sys.exit(1)
 
 # =======================
-# Налаштування бота та файлів
+# Налаштування бота та імена файлів
 # =======================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 ADMIN_IDS = [1124775269, 382701754]  # ID адміністраторів
 
-# Локальні імена файлів (файли використовуються лише як проміжне сховище)
+# Локальні імена файлів (файли використовуються як проміжне сховище, основні дані зберігаються на Google Drive)
 SETTINGS_FILE = "settings.json"
 USERS_FILE = "users.txt"
 
@@ -71,7 +71,7 @@ default_settings = {
     "event_location": "Club XYZ"
 }
 
-# ID папки на Google Drive (якщо хочете зберігати файли в окремій папці)
+# ID папки на Google Drive, де мають зберігатись файли (повинна бути задана як змінна середовища)
 DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")  # наприклад, "1NjXo_bi1PXM0j-L6RWnJrDv6aDm-y4B0"
 
 # ==================================
@@ -89,8 +89,7 @@ try:
 except Exception as e:
     logger.error(f"Помилка ініціалізації Google Drive service: {e}")
 
-# --- Функції для роботи з файлами на Google Drive ---
-
+# === Функції для роботи з файлами на Google Drive ===
 def download_file_from_drive(file_name, local_path, drive_folder_id=DRIVE_FOLDER_ID):
     try:
         q = f"name='{file_name}'"
@@ -151,9 +150,7 @@ def ensure_file_on_drive(file_name, local_path, default_content, drive_folder_id
         if drive_folder_id:
             q += f" and '{drive_folder_id}' in parents"
         results = drive_service.files().list(
-            q=q,
-            spaces='drive',
-            fields='files(id, name)'
+            q=q, spaces='drive', fields='files(id, name)'
         ).execute()
         files = results.get('files', [])
         if files:
@@ -280,8 +277,12 @@ def get_invitation_message() -> str:
     )
     return message
 
+# === Визначення констант для станів розмови ===
+NAME, PHONE, USERNAME, SOURCE = range(4)
+ADMIN_DATE, ADMIN_TIME, ADMIN_LOCATION, ADMIN_BROADCAST = range(4, 8)
+
 # === Хендлери для користувача ===
-def start(update: Update, context: CallbackContext):
+def start_command(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     add_user(chat_id)
     update.message.reply_text(
@@ -512,7 +513,7 @@ admin_conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", admin_cancel)],
 )
 
-dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(CommandHandler("start", start_command))
 dispatcher.add_handler(CommandHandler("starts", starts))
 dispatcher.add_handler(reg_conv_handler)
 dispatcher.add_handler(CommandHandler("admin", admin))
@@ -535,8 +536,8 @@ def webhook():
 
 # === Основна функція ===
 def main():
-    load_settings()   # Завантаження налаштувань із Drive
-    load_users()      # Завантаження списку користувачів із Drive
+    load_settings()   # Завантаження налаштувань із Google Drive
+    load_users()      # Завантаження списку користувачів із Google Drive
     
     port = int(os.environ.get("PORT", "8443"))
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
