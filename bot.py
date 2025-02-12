@@ -54,13 +54,13 @@ if not os.path.exists("credentials.json"):
         sys.exit(1)
 
 # =======================
-# Налаштування бота та імена файлів
+# Налаштування бота та файлів
 # =======================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 ADMIN_IDS = [1124775269, 382701754]  # ID адміністраторів
 
-# Імена файлів (локально, але вони створюються/оновлюються через Google Drive)
+# Локальні імена файлів (файли використовуються лише як проміжне сховище)
 SETTINGS_FILE = "settings.json"
 USERS_FILE = "users.txt"
 
@@ -70,6 +70,9 @@ default_settings = {
     "event_time": "20:00",
     "event_location": "Club XYZ"
 }
+
+# ID папки на Google Drive (якщо хочете зберігати файли в окремій папці)
+DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")  # наприклад, "1NjXo_bi1PXM0j-L6RWnJrDv6aDm-y4B0"
 
 # ==================================
 # Налаштування Google Drive API
@@ -86,36 +89,15 @@ try:
 except Exception as e:
     logger.error(f"Помилка ініціалізації Google Drive service: {e}")
 
-# --- Допоміжна функція, що забезпечує наявність файлу на Google Drive ---
-def ensure_file_on_drive(file_name, local_path, default_content):
-    try:
-        results = drive_service.files().list(
-            q=f"name='{file_name}'",
-            spaces='drive',
-            fields='files(id, name)'
-        ).execute()
-        files = results.get('files', [])
-        if files:
-            # Якщо файл існує – завантажуємо його з Drive
-            if download_file_from_drive(file_name, local_path):
-                logger.info("Файл %s завантажено з Google Drive.", file_name)
-        else:
-            # Файл не знайдено – створюємо локально з дефолтним вмістом
-            with open(local_path, "w", encoding="utf-8") as f:
-                f.write(default_content)
-            # Завантажуємо його на Drive
-            upload_file_to_drive(local_path, file_name)
-            logger.info("Файл %s створено та завантажено на Google Drive.", file_name)
-    except Exception as e:
-        logger.error(f"Помилка при перевірці/створенні файлу {file_name} на Google Drive: {e}")
+# --- Функції для роботи з файлами на Google Drive ---
 
-# Функція завантаження файлу з Google Drive
-def download_file_from_drive(file_name, local_path):
+def download_file_from_drive(file_name, local_path, drive_folder_id=DRIVE_FOLDER_ID):
     try:
+        q = f"name='{file_name}'"
+        if drive_folder_id:
+            q += f" and '{drive_folder_id}' in parents"
         results = drive_service.files().list(
-            q=f"name='{file_name}'",
-            spaces='drive',
-            fields='files(id, name)'
+            q=q, spaces='drive', fields='files(id, name)'
         ).execute()
         files = results.get('files', [])
         if files:
@@ -127,20 +109,23 @@ def download_file_from_drive(file_name, local_path):
             while not done:
                 status, done = downloader.next_chunk()
             fh.close()
+            logger.info("Файл %s завантажено з Google Drive.", file_name)
             return True
     except Exception as e:
         logger.error(f"Помилка завантаження {file_name} з Google Drive: {e}")
     return False
 
-# Функція завантаження (оновлення) файлу на Google Drive
-def upload_file_to_drive(local_path, file_name, drive_folder_id=None):
+def upload_file_to_drive(local_path, file_name, drive_folder_id=DRIVE_FOLDER_ID):
     file_metadata = {'name': file_name}
     if drive_folder_id:
         file_metadata['parents'] = [drive_folder_id]
     media = MediaFileUpload(local_path, mimetype='text/plain')
     try:
+        q = f"name='{file_name}'"
+        if drive_folder_id:
+            q += f" and '{drive_folder_id}' in parents"
         results = drive_service.files().list(
-            q=f"name='{file_name}'", spaces='drive', fields='files(id, name)'
+            q=q, spaces='drive', fields='files(id, name)'
         ).execute()
         files = results.get('files', [])
         if files:
@@ -159,6 +144,29 @@ def upload_file_to_drive(local_path, file_name, drive_folder_id=None):
     except Exception as e:
         logger.error(f"Помилка завантаження файлу {file_name} на Google Drive: {e}")
         return None
+
+def ensure_file_on_drive(file_name, local_path, default_content, drive_folder_id=DRIVE_FOLDER_ID):
+    try:
+        q = f"name='{file_name}'"
+        if drive_folder_id:
+            q += f" and '{drive_folder_id}' in parents"
+        results = drive_service.files().list(
+            q=q,
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        files = results.get('files', [])
+        if files:
+            # Якщо файл існує – завантажуємо його
+            download_file_from_drive(file_name, local_path, drive_folder_id)
+        else:
+            # Якщо файл не знайдено – створюємо його локально з дефолтним вмістом
+            with open(local_path, "w", encoding="utf-8") as f:
+                f.write(default_content)
+            upload_file_to_drive(local_path, file_name, drive_folder_id)
+            logger.info("Файл %s створено та завантажено на Google Drive.", file_name)
+    except Exception as e:
+        logger.error(f"Помилка перевірки/створення файлу {file_name} на Google Drive: {e}")
 
 # === Завантаження налаштувань із Google Drive ===
 def load_settings():
@@ -192,7 +200,7 @@ def save_settings():
 
 # === Завантаження списку користувачів із Google Drive ===
 def load_users():
-    default_users_content = ""  # Пустий файл за замовчуванням
+    default_users_content = ""  # Порожній файл за замовчуванням
     ensure_file_on_drive("users.txt", USERS_FILE, default_users_content)
     try:
         with open(USERS_FILE, "r") as f:
@@ -206,7 +214,7 @@ def load_users():
 # === Функції для роботи з користувачами ===
 def add_user(user_id: int):
     try:
-        users = load_users()  # Завантажуємо список користувачів з Drive
+        users = load_users()  # Завантажуємо список користувачів із Drive
         if str(user_id) not in users:
             with open(USERS_FILE, "a") as f:
                 f.write(str(user_id) + "\n")
@@ -527,9 +535,8 @@ def webhook():
 
 # === Основна функція ===
 def main():
-    load_settings()
-    # Забезпечуємо, що файл користувачів завжди завантажено з Google Drive
-    load_users()
+    load_settings()   # Завантаження налаштувань із Drive
+    load_users()      # Завантаження списку користувачів із Drive
     
     port = int(os.environ.get("PORT", "8443"))
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
