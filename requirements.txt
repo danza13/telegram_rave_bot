@@ -1,8 +1,0 @@
-Flask==2.2.2
-Werkzeug<3.0
-python-telegram-bot==13.11
-gspread
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
