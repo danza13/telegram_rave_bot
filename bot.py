@@ -31,19 +31,18 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
-# Налаштування логування
+# === Налаштування логування ===
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Налаштування секретів для credentials.json ---
-# Якщо credentials.json не існує, створюємо його з змінної середовища
+# === Якщо credentials.json не існує, створюємо його зі змінної середовища ===
 if not os.path.exists("credentials.json"):
     creds = os.environ.get("GOOGLE_CREDENTIALS")
     if creds:
         try:
-            json.loads(creds)  # Перевірка на валідність JSON
+            json.loads(creds)  # Перевірка валідності JSON
             with open("credentials.json", "w", encoding="utf-8") as f:
                 f.write(creds)
             logger.info("Файл credentials.json створено з Render Secrets.")
@@ -55,17 +54,16 @@ if not os.path.exists("credentials.json"):
         sys.exit(1)
 
 # =======================
-# Налаштування бота
+# Налаштування бота та файли
 # =======================
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
-ADMIN_IDS = [1124775269, 382701754]  # Обидва ID адміністраторів
+ADMIN_IDS = [1124775269, 382701754]  # ID адміністраторів
 
-# Файл для збереження налаштувань заходу (локально)
-SETTINGS_FILE = "settings.json"
-USERS_FILE = "users.txt"
+SETTINGS_FILE = "settings.json"  # Локальний файл налаштувань
+USERS_FILE = "users.txt"         # Локальний файл з ID користувачів
 
-# Глобальні змінні для інформації про захід (за замовчуванням)
+# Глобальні змінні заходу (за замовчуванням)
 event_date = "18.02"      # формат: дд.мм
 event_time = "20:00"      # формат: гг:хх
 event_location = "Club XYZ"
@@ -74,7 +72,7 @@ event_location = "Club XYZ"
 # Налаштування Google Drive API
 # ==================================
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
-SERVICE_ACCOUNT_FILE = 'credentials.json'  # Використовується файл, який ми забезпечили
+SERVICE_ACCOUNT_FILE = 'credentials.json'
 
 try:
     drive_creds = service_account.Credentials.from_service_account_file(
@@ -85,7 +83,7 @@ try:
 except Exception as e:
     logger.error(f"Помилка ініціалізації Google Drive service: {e}")
 
-# Функція для завантаження файлу з Google Drive
+# Функція завантаження файлу з Google Drive
 def download_file_from_drive(file_name, local_path):
     try:
         results = drive_service.files().list(
@@ -96,9 +94,9 @@ def download_file_from_drive(file_name, local_path):
         files = results.get('files', [])
         if files:
             file_id = files[0]['id']
-            request = drive_service.files().get_media(fileId=file_id)
+            request_drive = drive_service.files().get_media(fileId=file_id)
             fh = io.FileIO(local_path, 'wb')
-            downloader = MediaIoBaseDownload(fh, request)
+            downloader = MediaIoBaseDownload(fh, request_drive)
             done = False
             while not done:
                 status, done = downloader.next_chunk()
@@ -109,13 +107,12 @@ def download_file_from_drive(file_name, local_path):
         logger.error(f"Помилка завантаження {file_name} з Google Drive: {e}")
     return False
 
-# Функція для завантаження (оновлення) файлу на Google Drive (залишається без змін)
+# Функція завантаження (оновлення) файлу на Google Drive
 def upload_file_to_drive(local_path, file_name, drive_folder_id=None):
     file_metadata = {'name': file_name}
     if drive_folder_id:
         file_metadata['parents'] = [drive_folder_id]
     media = MediaFileUpload(local_path, mimetype='text/plain')
-    
     try:
         results = drive_service.files().list(
             q=f"name='{file_name}'", spaces='drive', fields='files(id, name)'
@@ -138,9 +135,10 @@ def upload_file_to_drive(local_path, file_name, drive_folder_id=None):
         logger.error(f"Помилка завантаження файлу {file_name} на Google Drive: {e}")
         return None
 
-# При завантаженні налаштувань – спочатку спробуємо завантажити settings.json з Drive
+# === Завантаження та збереження налаштувань ===
 def load_settings():
     global event_date, event_time, event_location
+    # Якщо локально відсутній файл, спробуємо завантажити його з Drive
     if not os.path.exists(SETTINGS_FILE):
         download_file_from_drive("settings.json", SETTINGS_FILE)
     if os.path.exists(SETTINGS_FILE):
@@ -150,7 +148,8 @@ def load_settings():
                 event_date = settings.get("event_date", event_date)
                 event_time = settings.get("event_time", event_time)
                 event_location = settings.get("event_location", event_location)
-                logger.info("Налаштування завантажено з файлу.")
+                logger.info("Налаштування завантажено з файлу. (Дата: %s, Час: %s, Локація: %s)",
+                            event_date, event_time, event_location)
         except Exception as e:
             logger.error(f"Помилка завантаження налаштувань: {e}")
 
@@ -164,19 +163,31 @@ def save_settings():
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=4)
             logger.info("Налаштування збережено локально.")
-        # Після збереження, оновлюємо файл на Drive
         upload_file_to_drive(SETTINGS_FILE, "settings.json")
     except Exception as e:
         logger.error(f"Помилка збереження налаштувань: {e}")
 
-# Для файлу users.txt аналогічно: при першому запуску завантажуємо з Drive (якщо існує)
-def load_users_file():
+# === Завантаження списку користувачів із файлу users.txt ===
+def load_users():
+    # Якщо файлу немає, спробуємо завантажити його з Drive
     if not os.path.exists(USERS_FILE):
         download_file_from_drive("users.txt", USERS_FILE)
+    users = []
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                users = f.read().splitlines()
+            logger.info("Завантажено %d користувачів з %s", len(users), USERS_FILE)
+        except Exception as e:
+            logger.error("Помилка при зчитуванні %s: %s", USERS_FILE, e)
+    else:
+        logger.info("Файл %s не знайдено.", USERS_FILE)
+    return users
 
+# === Функції для роботи з користувачами ===
 def add_user(user_id: int):
     try:
-        load_users_file()  # Завантаження файлу, якщо його ще нема локально
+        load_users()  # Завантаження локального файлу, якщо ще не завантажено
         users = []
         if os.path.exists(USERS_FILE):
             with open(USERS_FILE, "r") as f:
@@ -184,7 +195,7 @@ def add_user(user_id: int):
         if str(user_id) not in users:
             with open(USERS_FILE, "a") as f:
                 f.write(str(user_id) + "\n")
-            logger.info(f"Користувача {user_id} додано у {USERS_FILE}")
+            logger.info("Користувача %d додано у %s", user_id, USERS_FILE)
             upload_file_to_drive(USERS_FILE, "users.txt")
     except Exception as e:
         logger.error(f"Помилка додавання користувача: {e}")
@@ -208,15 +219,7 @@ def store_registration(user_data: dict):
     except Exception as e:
         logger.error(f"Помилка запису в Google Sheets: {e}")
 
-# =======================
-# Константи для станів
-# =======================
-NAME, PHONE, USERNAME, SOURCE = range(4)
-ADMIN_DATE, ADMIN_TIME, ADMIN_LOCATION, ADMIN_BROADCAST = range(4, 8)
-
-# =======================
-# Допоміжні функції
-# =======================
+# === Допоміжні функції ===
 def get_weekday(date_str: str) -> str:
     try:
         day, month = map(int, date_str.split('.'))
@@ -254,9 +257,7 @@ def get_invitation_message() -> str:
     )
     return message
 
-# =======================
-# Хендлери для користувача
-# =======================
+# === Хендлери для користувача ===
 def start(update: Update, context: CallbackContext):
     chat_id = update.effective_chat.id
     add_user(chat_id)
@@ -294,7 +295,7 @@ def invitation_response(update: Update, context: CallbackContext):
         reply_markup = InlineKeyboardMarkup(keyboard)
         context.bot.send_message(
             chat_id=chat_id,
-            text="Зрозуміло!\n\nТоді чекаємо тебе наступного разу, або ж передумай та приходь на цю вечірку)",
+            text="Зрозуміло! Тоді чекаємо тебе наступного разу, або ж передумай та приходь!",
             reply_markup=reply_markup
         )
         return ConversationHandler.END
@@ -333,13 +334,10 @@ def get_phone(update: Update, context: CallbackContext):
         phone = update.message.text.strip()
         if phone.lower() == "відміна":
             return cancel(update, context)
-    
     phone = re.sub(r"[^\d+]", "", phone)
     if not phone.startswith("+"):
         phone = "+" + phone
-
-    logger.info(f"Очищений номер телефону: {phone}")
-    
+    logger.info("Очищений номер телефону: %s", phone)
     if not (phone.startswith("+380") and len(phone) == 13 and phone[1:].isdigit()):
         update.message.reply_text("Будь ласка, введіть коректний номер телефону у форматі +380XXXXXXXXX.")
         return PHONE
@@ -369,12 +367,7 @@ def get_source(update: Update, context: CallbackContext):
         return cancel(update, context)
     context.user_data["source"] = source_text
     store_registration(context.user_data)
-    
-    update.message.reply_text(
-        "Дякуємо за реєстрацію, чекаємо вас на вході для перевірки інформації 🫶🏻",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    
+    update.message.reply_text("Дякуємо за реєстрацію, чекаємо вас на вході для перевірки інформації 🫶🏻", reply_markup=ReplyKeyboardRemove())
     social_text = (
         "Залишайся з ботом до самої вечірки, адже через нього тобі будуть надходити важливі повідомлення щодо деталей заходу!\n\n"
         "Підпишись на наші соціальні мережі та будь в курсі новин 👇🏻"
@@ -386,16 +379,13 @@ def get_source(update: Update, context: CallbackContext):
     ]
     reply_markup_inline = InlineKeyboardMarkup(keyboard)
     update.message.reply_text(social_text, reply_markup=reply_markup_inline)
-    
     return ConversationHandler.END
 
 def cancel(update: Update, context: CallbackContext):
     update.message.reply_text("Реєстрацію скасовано.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# =======================
-# Хендлери для адміністратора
-# =======================
+# === Хендлери для адміністратора ===
 def admin(update: Update, context: CallbackContext):
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
@@ -403,7 +393,7 @@ def admin(update: Update, context: CallbackContext):
         return
     keyboard = [
         [InlineKeyboardButton("Змінити інформацію про захід", callback_data="admin_change")],
-        [InlineKeyboardButton("Розсилка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("Розсилка", callback_data="admin_broadcast")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text("Адмін панель:", reply_markup=reply_markup)
@@ -439,16 +429,15 @@ def admin_set_location(update: Update, context: CallbackContext):
 
 def admin_broadcast_message(update: Update, context: CallbackContext):
     message_text = update.message.text
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r") as f:
-            user_ids = f.read().splitlines()
+    users = load_users()  # Зчитування користувачів із users.txt
+    if users:
         count = 0
-        for uid in user_ids:
+        for uid in users:
             try:
                 context.bot.send_message(chat_id=int(uid), text=message_text)
                 count += 1
             except Exception as e:
-                logger.error(f"Помилка відправки повідомлення користувачу {uid}: {e}")
+                logger.error("Помилка відправки повідомлення користувачу %s: %s", uid, e)
         update.message.reply_text(f"Розсилка завершена. Повідомлення відправлено {count} користувачам.")
     else:
         update.message.reply_text("Немає користувачів для розсилки.")
@@ -459,11 +448,9 @@ def admin_cancel(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 def error_handler(update: object, context: CallbackContext):
-    logger.error(msg="Виникла помилка: ", exc_info=context.error)
+    logger.error("Виникла помилка: ", exc_info=context.error)
 
-# =======================
-# Налаштування диспетчера
-# =======================
+# === Налаштування диспетчера ===
 bot = Bot(TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
@@ -509,9 +496,7 @@ dispatcher.add_handler(admin_conv_handler)
 dispatcher.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
 dispatcher.add_error_handler(error_handler)
 
-# =======================
-# Flask-додаток для вебхуку та health check
-# =======================
+# === Flask-додаток для вебхуку та health check ===
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
@@ -524,24 +509,21 @@ def webhook():
     dispatcher.process_update(update)
     return "ok", 200
 
-# =======================
-# Основна функція
-# =======================
+# === Основна функція ===
 def main():
     load_settings()
+    # Завантажуємо список користувачів і логування кількості
+    load_users()
     
-    # Отримання порту та URL вебхуку із змінних оточення
     port = int(os.environ.get("PORT", "8443"))
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
     if not WEBHOOK_URL.endswith("/"):
         WEBHOOK_URL += "/"
     
-    # Видаляємо існуючий вебхук та встановлюємо новий
     bot.delete_webhook()
     bot.set_webhook(WEBHOOK_URL + TOKEN)
     logger.info("Бот запущено через вебхук!")
     
-    # Запуск Flask-сервера
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
