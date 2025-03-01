@@ -27,10 +27,6 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-
 # === Налаштування логування ===
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -60,9 +56,13 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 ADMIN_IDS = [1124775269, 382701754]  # ID адміністраторів
 
-# Локальні імена файлів (файли використовуються як проміжне сховище, основні дані зберігаються на Google Drive)
-SETTINGS_FILE = "settings.json"
-USERS_FILE = "users.txt"
+# Використання внутрішнього сховища процесу на Render
+DATA_DIR = os.getenv("DATA_DIR", "/data")
+if not os.path.exists(DATA_DIR):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+USERS_FILE = os.path.join(DATA_DIR, "users.txt")
 
 # Дефолтні налаштування заходу
 default_settings = {
@@ -71,105 +71,22 @@ default_settings = {
     "event_location": "Club XYZ"
 }
 
-# ID папки на Google Drive, де мають зберігатись файли (повинна бути задана як змінна середовища)
-DRIVE_FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID")  # наприклад, "1NjXo_bi1PXM0j-L6RWnJrDv6aDm-y4B0"
-
-# ==================================
-# Налаштування Google Drive API
-# ==================================
-DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file']
-SERVICE_ACCOUNT_FILE = 'credentials.json'
-
-try:
-    drive_creds = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE, scopes=DRIVE_SCOPES
-    )
-    drive_service = build('drive', 'v3', credentials=drive_creds)
-    logger.info("Google Drive service ініціалізовано.")
-except Exception as e:
-    logger.error(f"Помилка ініціалізації Google Drive service: {e}")
-
-# === Функції для роботи з файлами на Google Drive ===
-def download_file_from_drive(file_name, local_path, drive_folder_id=DRIVE_FOLDER_ID):
-    try:
-        q = f"name='{file_name}'"
-        if drive_folder_id:
-            q += f" and '{drive_folder_id}' in parents"
-        results = drive_service.files().list(
-            q=q, spaces='drive', fields='files(id, name)'
-        ).execute()
-        files = results.get('files', [])
-        if files:
-            file_id = files[0]['id']
-            request_drive = drive_service.files().get_media(fileId=file_id)
-            fh = io.FileIO(local_path, 'wb')
-            downloader = MediaIoBaseDownload(fh, request_drive)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-            fh.close()
-            logger.info("Файл %s завантажено з Google Drive.", file_name)
-            return True
-    except Exception as e:
-        logger.error(f"Помилка завантаження {file_name} з Google Drive: {e}")
-    return False
-
-def upload_file_to_drive(local_path, file_name, drive_folder_id=DRIVE_FOLDER_ID):
-    file_metadata = {'name': file_name}
-    if drive_folder_id:
-        file_metadata['parents'] = [drive_folder_id]
-    media = MediaFileUpload(local_path, mimetype='text/plain')
-    try:
-        q = f"name='{file_name}'"
-        if drive_folder_id:
-            q += f" and '{drive_folder_id}' in parents"
-        results = drive_service.files().list(
-            q=q, spaces='drive', fields='files(id, name)'
-        ).execute()
-        files = results.get('files', [])
-        if files:
-            file_id = files[0]['id']
-            updated_file = drive_service.files().update(
-                fileId=file_id, media_body=media
-            ).execute()
-            logger.info("Файл %s оновлено на Google Drive.", file_name)
-            return updated_file.get('id')
-        else:
-            file = drive_service.files().create(
-                body=file_metadata, media_body=media, fields='id'
-            ).execute()
-            logger.info("Файл %s створено на Google Drive.", file_name)
-            return file.get('id')
-    except Exception as e:
-        logger.error(f"Помилка завантаження файлу {file_name} на Google Drive: {e}")
-        return None
-
-def ensure_file_on_drive(file_name, local_path, default_content, drive_folder_id=DRIVE_FOLDER_ID):
-    try:
-        q = f"name='{file_name}'"
-        if drive_folder_id:
-            q += f" and '{drive_folder_id}' in parents"
-        results = drive_service.files().list(
-            q=q, spaces='drive', fields='files(id, name)'
-        ).execute()
-        files = results.get('files', [])
-        if files:
-            # Якщо файл існує – завантажуємо його
-            download_file_from_drive(file_name, local_path, drive_folder_id)
-        else:
-            # Якщо файл не знайдено – створюємо його локально з дефолтним вмістом
-            with open(local_path, "w", encoding="utf-8") as f:
+# === Функції для роботи з файлами у внутрішньому сховищі ===
+def ensure_local_file(file_path, default_content):
+    """Якщо файл не існує, створити його з дефолтним вмістом."""
+    if not os.path.exists(file_path):
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(default_content)
-            upload_file_to_drive(local_path, file_name, drive_folder_id)
-            logger.info("Файл %s створено та завантажено на Google Drive.", file_name)
-    except Exception as e:
-        logger.error(f"Помилка перевірки/створення файлу {file_name} на Google Drive: {e}")
+            logger.info("Файл %s створено локально.", file_path)
+        except Exception as e:
+            logger.error("Помилка створення файлу %s: %s", file_path, e)
 
-# === Завантаження налаштувань із Google Drive ===
+# === Завантаження та збереження налаштувань із внутрішнього сховища ===
 def load_settings():
     global event_date, event_time, event_location
     default_settings_content = json.dumps(default_settings, ensure_ascii=False, indent=4)
-    ensure_file_on_drive("settings.json", SETTINGS_FILE, default_settings_content)
+    ensure_local_file(SETTINGS_FILE, default_settings_content)
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             settings = json.load(f)
@@ -179,7 +96,7 @@ def load_settings():
             logger.info("Налаштування завантажено: Дата: %s, Час: %s, Локація: %s",
                         event_date, event_time, event_location)
     except Exception as e:
-        logger.error(f"Помилка завантаження налаштувань: {e}")
+        logger.error("Помилка завантаження налаштувань: %s", e)
 
 def save_settings():
     settings = {
@@ -190,17 +107,15 @@ def save_settings():
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(settings, f, ensure_ascii=False, indent=4)
-            logger.info("Налаштування збережено локально.")
-        upload_file_to_drive(SETTINGS_FILE, "settings.json")
+        logger.info("Налаштування збережено локально.")
     except Exception as e:
-        logger.error(f"Помилка збереження налаштувань: {e}")
+        logger.error("Помилка збереження налаштувань: %s", e)
 
-# === Завантаження списку користувачів із Google Drive ===
+# === Завантаження списку користувачів із внутрішнього сховища ===
 def load_users():
-    default_users_content = ""  # Порожній файл за замовчуванням
-    ensure_file_on_drive("users.txt", USERS_FILE, default_users_content)
+    ensure_local_file(USERS_FILE, "")  # Порожній файл за замовчуванням
     try:
-        with open(USERS_FILE, "r") as f:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
             users = f.read().splitlines()
         logger.info("Завантажено %d користувачів із %s", len(users), USERS_FILE)
         return users
@@ -211,14 +126,13 @@ def load_users():
 # === Функції для роботи з користувачами ===
 def add_user(user_id: int):
     try:
-        users = load_users()  # Завантажуємо список користувачів із Drive
+        users = load_users()
         if str(user_id) not in users:
-            with open(USERS_FILE, "a") as f:
+            with open(USERS_FILE, "a", encoding="utf-8") as f:
                 f.write(str(user_id) + "\n")
             logger.info("Користувача %d додано у %s", user_id, USERS_FILE)
-            upload_file_to_drive(USERS_FILE, "users.txt")
     except Exception as e:
-        logger.error(f"Помилка додавання користувача: {e}")
+        logger.error("Помилка додавання користувача: %s", e)
 
 def store_registration(user_data: dict):
     try:
@@ -237,14 +151,14 @@ def store_registration(user_data: dict):
             user_data.get("source"),
         ])
     except Exception as e:
-        logger.error(f"Помилка запису в Google Sheets: {e}")
+        logger.error("Помилка запису в Google Sheets: %s", e)
 
 # === Допоміжні функції ===
 def get_weekday(date_str: str) -> str:
     try:
         day, month = map(int, date_str.split('.'))
     except Exception as e:
-        logger.error(f"Невірний формат дати: {date_str}. Помилка: {e}")
+        logger.error("Невірний формат дати: %s. Помилка: %s", date_str, e)
         return "невідомий день"
     now = datetime.datetime.now()
     year = now.year
@@ -454,7 +368,7 @@ def admin_set_location(update: Update, context: CallbackContext):
 
 def admin_broadcast_message(update: Update, context: CallbackContext):
     message_text = update.message.text
-    users = load_users()  # Зчитуємо список користувачів із Google Drive
+    users = load_users()
     if users:
         count = 0
         for uid in users:
@@ -536,8 +450,8 @@ def webhook():
 
 # === Основна функція ===
 def main():
-    load_settings()   # Завантаження налаштувань із Google Drive
-    load_users()      # Завантаження списку користувачів із Google Drive
+    load_settings()   # Завантаження налаштувань із внутрішнього сховища
+    load_users()      # Завантаження списку користувачів із внутрішнього сховища
     
     port = int(os.environ.get("PORT", "8443"))
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
