@@ -135,6 +135,7 @@ def add_user(user_id: int):
         logger.error("Помилка додавання користувача: %s", e)
 
 def store_registration(user_data: dict):
+    """Записуємо дані користувача в Google Sheets, додаємо стовпець з часом реєстрації."""
     try:
         gc = gspread.service_account(filename="credentials.json")
         sh = gc.open_by_key(SPREADSHEET_ID)
@@ -143,12 +144,18 @@ def store_registration(user_data: dict):
             worksheet = sh.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
             worksheet = sh.add_worksheet(title=sheet_name, rows="100", cols="20")
-            worksheet.append_row(["Ім'я", "Телефон", "Telegram", "Джерело"])
+            # Оновлюємо заголовок, тепер маємо 5 стовпців
+            worksheet.append_row(["Ім'я", "Телефон", "Telegram", "Джерело", "Час реєстрації"])
+
+        # Додаємо час у форматі ГГ:ХХ (HH:MM)
+        registration_time = datetime.datetime.now().strftime("%H:%M")
+
         worksheet.append_row([
             user_data.get("name"),
             user_data.get("phone"),
             user_data.get("username"),
             user_data.get("source"),
+            registration_time
         ])
     except Exception as e:
         logger.error("Помилка запису в Google Sheets: %s", e)
@@ -205,8 +212,10 @@ def start_command(update: Update, context: CallbackContext):
 
 def starts(update: Update, context: CallbackContext):
     add_user(update.effective_chat.id)
+    # Видаляємо клавіатуру (але саме повідомлення не видаляємо)
     msg = update.message.reply_text("\u2063", reply_markup=ReplyKeyboardRemove())
     context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg.message_id)
+
     text = get_invitation_message()
     keyboard = [
         [
@@ -218,12 +227,16 @@ def starts(update: Update, context: CallbackContext):
     update.message.reply_text(text, reply_markup=reply_markup)
 
 def invitation_response(update: Update, context: CallbackContext):
+    """Користувач натискає 'Так' або 'Ні' на запрошення."""
     query = update.callback_query
     query.answer()
-    try:
-        query.message.delete()
-    except Exception as e:
-        logger.error("Помилка при видаленні повідомлення запрошення: %s", e)
+
+    # Щоб повідомлення не зникало, не видаляємо його:
+    # try:
+    #     query.message.delete()
+    # except Exception as e:
+    #     logger.error("Помилка при видаленні повідомлення запрошення: %s", e)
+
     chat_id = update.effective_chat.id
     if query.data == "yes":
         context.bot.send_message(chat_id=chat_id, text="Введіть ваше ім'я:")
@@ -239,6 +252,7 @@ def invitation_response(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 def back_handler(update: Update, context: CallbackContext):
+    """Обробляє кнопку 'Назад'."""
     query = update.callback_query
     query.answer()
     text = get_invitation_message()
@@ -272,13 +286,16 @@ def get_phone(update: Update, context: CallbackContext):
         phone = update.message.text.strip()
         if phone.lower() == "відміна":
             return cancel(update, context)
+
     phone = re.sub(r"[^\d+]", "", phone)
     if not phone.startswith("+"):
         phone = "+" + phone
     logger.info("Очищений номер телефону: %s", phone)
+
     if not (phone.startswith("+380") and len(phone) == 13 and phone[1:].isdigit()):
         update.message.reply_text("Будь ласка, введіть коректний номер телефону у форматі +380XXXXXXXXX.")
         return PHONE
+
     context.user_data["phone"] = phone
     reply_markup = ReplyKeyboardMarkup([["Відміна"]], one_time_keyboard=False, resize_keyboard=True)
     update.message.reply_text("Введіть ваш Telegram нік (через @):", reply_markup=reply_markup)
@@ -291,10 +308,12 @@ def get_username(update: Update, context: CallbackContext):
     if not username.startswith("@"):
         update.message.reply_text("Будь ласка, введіть ваш Telegram нік, який починається з @.")
         return USERNAME
+
     context.user_data["username"] = username
     reply_markup = ReplyKeyboardMarkup([["Відміна"]], one_time_keyboard=False, resize_keyboard=True)
     update.message.reply_text(
-        "Де ви побачили інформацію про вечірку?\n(наприклад: інстаграм реклама, інстаграм сторінка, телеграм канал Холі, інший телеграм канал)",
+        "Де ви побачили інформацію про вечірку?\n"
+        "(наприклад: інстаграм реклама, інстаграм сторінка, телеграм канал Холі, інший телеграм канал)",
         reply_markup=reply_markup
     )
     return SOURCE
@@ -304,11 +323,16 @@ def get_source(update: Update, context: CallbackContext):
     if source_text.lower() == "відміна":
         return cancel(update, context)
     context.user_data["source"] = source_text
+
+    # Зберігаємо всі дані реєстрації
     store_registration(context.user_data)
-    update.message.reply_text("Дякуємо за реєстрацію, чекаємо вас на вході для перевірки інформації 🫶🏻",
-                                reply_markup=ReplyKeyboardRemove())
+    update.message.reply_text(
+        "Дякуємо за реєстрацію, чекаємо вас на вході для перевірки інформації 🫶🏻",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
     social_text = (
-        "Залишайся з ботом до самої вечірки, адже через нього тобі будуть надходити важливі повідомлення щодо деталей заходу!\n\n"
+        "Залишайся з ботом до самої вечірки, адже через нього тобі будуть надходити важливі повідомлення!\n\n"
         "Підпишись на наші соціальні мережі та будь в курсі новин 👇🏻"
     )
     keyboard = [
