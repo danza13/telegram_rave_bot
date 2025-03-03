@@ -70,7 +70,7 @@ default_settings = {
     "event_location": "Club XYZ"
 }
 
-# Дефолтний текст додаткового повідомлення
+# Дефолтний текст повідомлення для реєстрації
 default_message_text = (
     "Чудово, ти можеш потрапити у список для безкоштовного входу який діє до 19:00!\n\n"
     "Після 19:00 вхід платний, вартість кватика на вході для дівчат 250 грн, хлопці 300-350 грн (В залежності від заповненості залу)"
@@ -251,14 +251,19 @@ def starts(update: Update, context: CallbackContext):
     update.message.reply_text(text, reply_markup=reply_markup)
 
 def invitation_response(update: Update, context: CallbackContext):
-    """Обробка натискання 'Так' або 'Ні' на запрошення."""
+    """
+    Обробка натискання кнопок «Так» або «Ні» на запрошення.
+    Якщо «Так» – надсилається повідомлення з текстом реєстрації (який можна редагувати) 
+    з інлайн-кнопкою «Реєстрація».
+    """
     query = update.callback_query
     query.answer()
-    chat_id = update.effective_chat.id
     if query.data == "yes":
-        # Без завершення розмови, одразу переходимо до введення імені
-        query.edit_message_text(text="Чудово! Для початку введіть ваше ім'я:")
-        return NAME
+        message_text = load_message_text()
+        keyboard = [[InlineKeyboardButton("Реєстрація", callback_data="register")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        context.bot.send_message(chat_id=update.effective_chat.id, text=message_text, reply_markup=reply_markup)
+        return ConversationHandler.END
     elif query.data == "no":
         keyboard = [[InlineKeyboardButton("Назад", callback_data="back")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -281,6 +286,15 @@ def back_handler(update: Update, context: CallbackContext):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     query.edit_message_text(text=text, reply_markup=reply_markup)
+
+def registration_start(update: Update, context: CallbackContext):
+    """
+    Запускає процес реєстрації після натискання інлайн-кнопки «Реєстрація».
+    """
+    query = update.callback_query
+    query.answer()
+    query.edit_message_text(text="Чудово! Для початку введіть ваше ім'я:")
+    return NAME
 
 def get_name(update: Update, context: CallbackContext):
     user_text = update.message.text
@@ -449,11 +463,19 @@ def main():
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Додаємо хендлери для користувача
+    # Хендлери для користувача
     dp.add_handler(CommandHandler("start", start_command))
     dp.add_handler(CommandHandler("starts", starts))
-    reg_conv_handler = ConversationHandler(
+    # Обробка кнопок "Так" та "Ні" на запрошення
+    invitation_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
+        states={},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    dp.add_handler(invitation_conv_handler)
+    # Хендлер для запуску реєстрації після натискання кнопки "Реєстрація"
+    reg_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(registration_start, pattern="^register$")],
         states={
             NAME: [
                 MessageHandler(Filters.text & ~Filters.command, get_name),
@@ -472,7 +494,7 @@ def main():
                 MessageHandler(Filters.regex("^Відміна$"), cancel)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     dp.add_handler(reg_conv_handler)
     dp.add_handler(CommandHandler("admin", admin))
