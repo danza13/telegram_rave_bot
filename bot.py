@@ -253,7 +253,7 @@ def starts(update: Update, context: CallbackContext):
 def invitation_response(update: Update, context: CallbackContext):
     """
     Обробка натискання кнопок «Так» або «Ні» на запрошення.
-    Якщо «Так» – надсилається повідомлення з текстом реєстрації (який можна редагувати) 
+    Якщо «Так» – надсилається повідомлення з текстом реєстрації (який можна редагувати)
     з інлайн-кнопкою «Реєстрація».
     """
     query = update.callback_query
@@ -289,11 +289,16 @@ def back_handler(update: Update, context: CallbackContext):
 
 def registration_start(update: Update, context: CallbackContext):
     """
-    Запускає процес реєстрації після натискання інлайн-кнопки «Реєстрація».
+    Запускає процес реєстрації після натискання кнопки «Реєстрація».
+    Нове повідомлення з проханням ввести ім'я надсилається окремо,
+    а оригінальне повідомлення із запрошенням залишається незмінним.
     """
     query = update.callback_query
     query.answer()
-    query.edit_message_text(text="Чудово! Для початку введіть ваше ім'я:")
+    context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="Чудово! Для початку введіть ваше ім'я:"
+    )
     return NAME
 
 def get_name(update: Update, context: CallbackContext):
