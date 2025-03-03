@@ -63,6 +63,7 @@ if not os.path.exists(DATA_DIR):
 
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.txt")
+MESSAGE_FILE = os.path.join(DATA_DIR, "message.txt")
 
 # Дефолтні налаштування заходу
 default_settings = {
@@ -70,6 +71,12 @@ default_settings = {
     "event_time": "20:00",
     "event_location": "Club XYZ"
 }
+
+# Дефолтний текст додаткового повідомлення
+default_message_text = (
+    "Чудово, ти можеш потрапити у список для безкоштовного входу який діє до 19:00!\n\n"
+    "Після 19:00 вхід платний, вартість кватика на вході для дівчат 250 грн, хлопці 300-350 грн (В залежності від заповненості залу)"
+)
 
 # === Функції для роботи з файлами у внутрішньому сховищі ===
 def ensure_local_file(file_path, default_content):
@@ -111,6 +118,25 @@ def save_settings():
     except Exception as e:
         logger.error("Помилка збереження налаштувань: %s", e)
 
+# === Функції для роботи з текстом повідомлення реєстрації ===
+def load_message_text():
+    ensure_local_file(MESSAGE_FILE, default_message_text)
+    try:
+        with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
+            text = f.read()
+        return text
+    except Exception as e:
+        logger.error("Помилка завантаження файлу %s: %s", MESSAGE_FILE, e)
+        return default_message_text
+
+def save_message_text(new_text):
+    try:
+        with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+            f.write(new_text)
+        logger.info("Текст повідомлення збережено у %s.", MESSAGE_FILE)
+    except Exception as e:
+        logger.error("Помилка збереження файлу %s: %s", MESSAGE_FILE, e)
+
 # === Завантаження списку користувачів із внутрішнього сховища ===
 def load_users():
     ensure_local_file(USERS_FILE, "")  # Порожній файл за замовчуванням
@@ -135,7 +161,7 @@ def add_user(user_id: int):
         logger.error("Помилка додавання користувача: %s", e)
 
 def store_registration(user_data: dict):
-    """Записуємо дані користувача в Google Sheets, додаємо стовпець з часом реєстрації."""
+    """Записуємо дані користувача в Google Sheets, додаємо стовпець з часом та датою реєстрації."""
     try:
         gc = gspread.service_account(filename="credentials.json")
         sh = gc.open_by_key(SPREADSHEET_ID)
@@ -147,8 +173,8 @@ def store_registration(user_data: dict):
             # Оновлюємо заголовок, тепер маємо 5 стовпців
             worksheet.append_row(["Ім'я", "Телефон", "Telegram", "Джерело", "Час реєстрації"])
 
-        # Додаємо час у форматі ГГ:ХХ (HH:MM)
-        registration_time = datetime.datetime.now().strftime("%H:%M")
+        # Додаємо дату і час у форматі "ГГ:ХХ\nДД.ММ.РРРР"
+        registration_time = datetime.datetime.now().strftime("%H:%M\n%d.%m.%Y")
 
         worksheet.append_row([
             user_data.get("name"),
@@ -198,9 +224,9 @@ def get_invitation_message() -> str:
     )
     return message
 
-# === Визначення констант для станів розмови ===
+# === Константи для станів розмови ===
 NAME, PHONE, USERNAME, SOURCE = range(4)
-ADMIN_DATE, ADMIN_TIME, ADMIN_LOCATION, ADMIN_BROADCAST = range(4, 8)
+ADMIN_DATE, ADMIN_TIME, ADMIN_LOCATION, ADMIN_BROADCAST, ADMIN_EDIT_MESSAGE = range(4, 9)
 
 # === Хендлери для користувача ===
 def start_command(update: Update, context: CallbackContext):
@@ -230,17 +256,16 @@ def invitation_response(update: Update, context: CallbackContext):
     """Користувач натискає 'Так' або 'Ні' на запрошення."""
     query = update.callback_query
     query.answer()
-
-    # Щоб повідомлення не зникало, не видаляємо його:
-    # try:
-    #     query.message.delete()
-    # except Exception as e:
-    #     logger.error("Помилка при видаленні повідомлення запрошення: %s", e)
-
     chat_id = update.effective_chat.id
     if query.data == "yes":
-        context.bot.send_message(chat_id=chat_id, text="Введіть ваше ім'я:")
-        return NAME
+        # Надсилаємо додаткове повідомлення з текстом, який можна редагувати
+        message_text = load_message_text()
+        keyboard = [
+            [InlineKeyboardButton("Продовжити реєстрацію", callback_data="start_registration")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        context.bot.send_message(chat_id=chat_id, text=message_text, reply_markup=reply_markup)
+        return ConversationHandler.END  # Зупиняємо поточну розмову; подальша розмова стартує через start_registration
     elif query.data == "no":
         keyboard = [[InlineKeyboardButton("Назад", callback_data="back")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -250,6 +275,14 @@ def invitation_response(update: Update, context: CallbackContext):
             reply_markup=reply_markup
         )
         return ConversationHandler.END
+
+def start_registration_callback(update: Update, context: CallbackContext):
+    """Callback для кнопки 'Продовжити реєстрацію'."""
+    query = update.callback_query
+    query.answer()
+    chat_id = update.effective_chat.id
+    context.bot.send_message(chat_id=chat_id, text="Введіть ваше ім'я:")
+    return NAME
 
 def back_handler(update: Update, context: CallbackContext):
     """Обробляє кнопку 'Назад'."""
@@ -356,7 +389,8 @@ def admin(update: Update, context: CallbackContext):
         return
     keyboard = [
         [InlineKeyboardButton("Змінити інформацію про захід", callback_data="admin_change")],
-        [InlineKeyboardButton("Розсилка", callback_data="admin_broadcast")]
+        [InlineKeyboardButton("Розсилка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("Редагувати текст повідомлення", callback_data="admin_edit_message")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     update.message.reply_text("Адмін панель:", reply_markup=reply_markup)
@@ -370,6 +404,10 @@ def admin_callback(update: Update, context: CallbackContext):
     elif query.data == "admin_broadcast":
         query.message.reply_text("Введіть текст повідомлення для розсилки:")
         return ADMIN_BROADCAST
+    elif query.data == "admin_edit_message":
+        current_text = load_message_text()
+        query.message.reply_text(f"Поточний текст повідомлення:\n\n{current_text}\n\nВведіть новий текст повідомлення:")
+        return ADMIN_EDIT_MESSAGE
 
 def admin_set_date(update: Update, context: CallbackContext):
     global event_date
@@ -406,6 +444,12 @@ def admin_broadcast_message(update: Update, context: CallbackContext):
         update.message.reply_text("Немає користувачів для розсилки.")
     return ConversationHandler.END
 
+def admin_set_message(update: Update, context: CallbackContext):
+    new_text = update.message.text
+    save_message_text(new_text)
+    update.message.reply_text("Текст повідомлення оновлено!")
+    return ConversationHandler.END
+
 def admin_cancel(update: Update, context: CallbackContext):
     update.message.reply_text("Адмін операцію скасовано.")
     return ConversationHandler.END
@@ -417,6 +461,7 @@ def error_handler(update: object, context: CallbackContext):
 bot = Bot(TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
+# Обробка callback для відповіді на запрошення ("Так"/"Ні")
 reg_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
     states={
@@ -440,13 +485,17 @@ reg_conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
 )
 
+# Обробка callback для кнопки "Продовжити реєстрацію"
+start_reg_handler = CallbackQueryHandler(start_registration_callback, pattern="^start_registration$")
+
 admin_conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(admin_callback, pattern="^(admin_change|admin_broadcast)$")],
+    entry_points=[CallbackQueryHandler(admin_callback, pattern="^(admin_change|admin_broadcast|admin_edit_message)$")],
     states={
         ADMIN_DATE: [MessageHandler(Filters.text & ~Filters.command, admin_set_date)],
         ADMIN_TIME: [MessageHandler(Filters.text & ~Filters.command, admin_set_time)],
         ADMIN_LOCATION: [MessageHandler(Filters.text & ~Filters.command, admin_set_location)],
         ADMIN_BROADCAST: [MessageHandler(Filters.text & ~Filters.command, admin_broadcast_message)],
+        ADMIN_EDIT_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_set_message)],
     },
     fallbacks=[CommandHandler("cancel", admin_cancel)],
 )
@@ -454,6 +503,7 @@ admin_conv_handler = ConversationHandler(
 dispatcher.add_handler(CommandHandler("start", start_command))
 dispatcher.add_handler(CommandHandler("starts", starts))
 dispatcher.add_handler(reg_conv_handler)
+dispatcher.add_handler(start_reg_handler)
 dispatcher.add_handler(CommandHandler("admin", admin))
 dispatcher.add_handler(admin_conv_handler)
 dispatcher.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
@@ -474,18 +524,19 @@ def webhook():
 
 # === Основна функція ===
 def main():
-    load_settings()   # Завантаження налаштувань із внутрішнього сховища
-    load_users()      # Завантаження списку користувачів із внутрішнього сховища
-    
+    load_settings()    # Завантаження налаштувань із внутрішнього сховища
+    load_users()       # Завантаження списку користувачів із внутрішнього сховища
+    load_message_text()  # Завантаження або створення файлу повідомлення
+
     port = int(os.environ.get("PORT", "8443"))
     WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
     if not WEBHOOK_URL.endswith("/"):
         WEBHOOK_URL += "/"
-    
+
     bot.delete_webhook()
     bot.set_webhook(WEBHOOK_URL + TOKEN)
     logger.info("Бот запущено через вебхук!")
-    
+
     app.run(host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
