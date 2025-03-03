@@ -253,36 +253,22 @@ def starts(update: Update, context: CallbackContext):
     update.message.reply_text(text, reply_markup=reply_markup)
 
 def invitation_response(update: Update, context: CallbackContext):
-    """Користувач натискає 'Так' або 'Ні' на запрошення."""
+    """Обробка натискання 'Так' або 'Ні' на запрошення."""
     query = update.callback_query
     query.answer()
     chat_id = update.effective_chat.id
     if query.data == "yes":
-        # Надсилаємо додаткове повідомлення з текстом, який можна редагувати
-        message_text = load_message_text()
-        keyboard = [
-            [InlineKeyboardButton("Почати реєстрацію", callback_data="start_registration")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        context.bot.send_message(chat_id=chat_id, text=message_text, reply_markup=reply_markup)
-        return ConversationHandler.END  # Зупиняємо поточну розмову; подальша розмова стартує через start_registration
+        # Без завершення розмови, одразу переходимо до введення імені
+        query.edit_message_text(text="Чудово! Для початку введіть ваше ім'я:")
+        return NAME
     elif query.data == "no":
         keyboard = [[InlineKeyboardButton("Назад", callback_data="back")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        context.bot.send_message(
-            chat_id=chat_id,
+        query.edit_message_text(
             text="Зрозуміло! Тоді чекаємо тебе наступного разу, або ж передумай та приходь!",
             reply_markup=reply_markup
         )
         return ConversationHandler.END
-
-def start_registration_callback(update: Update, context: CallbackContext):
-    """Callback для кнопки 'Продовжити реєстрацію'."""
-    query = update.callback_query
-    query.answer()
-    chat_id = update.effective_chat.id
-    context.bot.send_message(chat_id=chat_id, text="Для початку введіть ваше ім'я:")
-    return NAME
 
 def back_handler(update: Update, context: CallbackContext):
     """Обробляє кнопку 'Назад'."""
@@ -461,7 +447,7 @@ def error_handler(update: object, context: CallbackContext):
 bot = Bot(TOKEN)
 dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
 
-# Обробка callback для відповіді на запрошення ("Так"/"Ні")
+# Розширений ConversationHandler для реєстрації
 reg_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
     states={
@@ -485,9 +471,10 @@ reg_conv_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel)],
 )
 
-# Обробка callback для кнопки "Продовжити реєстрацію"
-start_reg_handler = CallbackQueryHandler(start_registration_callback, pattern="^start_registration$")
-
+dispatcher.add_handler(CommandHandler("start", start_command))
+dispatcher.add_handler(CommandHandler("starts", starts))
+dispatcher.add_handler(reg_conv_handler)
+dispatcher.add_handler(CommandHandler("admin", admin))
 admin_conv_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(admin_callback, pattern="^(admin_change|admin_broadcast|admin_edit_message)$")],
     states={
@@ -499,12 +486,6 @@ admin_conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", admin_cancel)],
 )
-
-dispatcher.add_handler(CommandHandler("start", start_command))
-dispatcher.add_handler(CommandHandler("starts", starts))
-dispatcher.add_handler(reg_conv_handler)
-dispatcher.add_handler(start_reg_handler)
-dispatcher.add_handler(CommandHandler("admin", admin))
 dispatcher.add_handler(admin_conv_handler)
 dispatcher.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
 dispatcher.add_error_handler(error_handler)
@@ -524,8 +505,8 @@ def webhook():
 
 # === Основна функція ===
 def main():
-    load_settings()    # Завантаження налаштувань із внутрішнього сховища
-    load_users()       # Завантаження списку користувачів із внутрішнього сховища
+    load_settings()      # Завантаження налаштувань із внутрішнього сховища
+    load_users()         # Завантаження списку користувачів із внутрішнього сховища
     load_message_text()  # Завантаження або створення файлу повідомлення
 
     port = int(os.environ.get("PORT", "8443"))
