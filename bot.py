@@ -6,8 +6,6 @@ import logging
 import datetime
 import re
 import gspread
-from flask import Flask, request
-
 from telegram import (
     Update,
     Bot,
@@ -18,7 +16,7 @@ from telegram import (
     ReplyKeyboardRemove,
 )
 from telegram.ext import (
-    Dispatcher,
+    Updater,
     CommandHandler,
     CallbackContext,
     MessageHandler,
@@ -56,8 +54,8 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 ADMIN_IDS = [1124775269, 382701754]  # ID адміністраторів
 
-# Використання внутрішнього сховища процесу на Render
-DATA_DIR = os.getenv("DATA_DIR", "/data")
+# Використання внутрішнього сховища процесу
+DATA_DIR = os.getenv("DATA_DIR", "./data")
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -443,82 +441,60 @@ def admin_cancel(update: Update, context: CallbackContext):
 def error_handler(update: object, context: CallbackContext):
     logger.error("Виникла помилка: ", exc_info=context.error)
 
-# === Налаштування диспетчера ===
-bot = Bot(TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
-
-# Розширений ConversationHandler для реєстрації
-reg_conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
-    states={
-        NAME: [
-            MessageHandler(Filters.text & ~Filters.command, get_name),
-            MessageHandler(Filters.regex("^Відміна$"), cancel)
-        ],
-        PHONE: [
-            MessageHandler(Filters.contact | (Filters.text & ~Filters.command), get_phone),
-            MessageHandler(Filters.regex("^Відміна$"), cancel)
-        ],
-        USERNAME: [
-            MessageHandler(Filters.text & ~Filters.command, get_username),
-            MessageHandler(Filters.regex("^Відміна$"), cancel)
-        ],
-        SOURCE: [
-            MessageHandler(Filters.text & ~Filters.command, get_source),
-            MessageHandler(Filters.regex("^Відміна$"), cancel)
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-dispatcher.add_handler(CommandHandler("start", start_command))
-dispatcher.add_handler(CommandHandler("starts", starts))
-dispatcher.add_handler(reg_conv_handler)
-dispatcher.add_handler(CommandHandler("admin", admin))
-admin_conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(admin_callback, pattern="^(admin_change|admin_broadcast|admin_edit_message)$")],
-    states={
-        ADMIN_DATE: [MessageHandler(Filters.text & ~Filters.command, admin_set_date)],
-        ADMIN_TIME: [MessageHandler(Filters.text & ~Filters.command, admin_set_time)],
-        ADMIN_LOCATION: [MessageHandler(Filters.text & ~Filters.command, admin_set_location)],
-        ADMIN_BROADCAST: [MessageHandler(Filters.text & ~Filters.command, admin_broadcast_message)],
-        ADMIN_EDIT_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_set_message)],
-    },
-    fallbacks=[CommandHandler("cancel", admin_cancel)],
-)
-dispatcher.add_handler(admin_conv_handler)
-dispatcher.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
-dispatcher.add_error_handler(error_handler)
-
-# === Flask-додаток для вебхуку та health check ===
-app = Flask(__name__)
-
-@app.route("/", methods=["GET"])
-def index():
-    return "ok", 200
-
-@app.route("/" + TOKEN, methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    dispatcher.process_update(update)
-    return "ok", 200
-
-# === Основна функція ===
 def main():
     load_settings()      # Завантаження налаштувань із внутрішнього сховища
     load_users()         # Завантаження списку користувачів із внутрішнього сховища
     load_message_text()  # Завантаження або створення файлу повідомлення
 
-    port = int(os.environ.get("PORT", "8443"))
-    WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Наприклад, "https://your-app.onrender.com/"
-    if not WEBHOOK_URL.endswith("/"):
-        WEBHOOK_URL += "/"
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    bot.delete_webhook()
-    bot.set_webhook(WEBHOOK_URL + TOKEN)
-    logger.info("Бот запущено через вебхук!")
+    # Додаємо хендлери для користувача
+    dp.add_handler(CommandHandler("start", start_command))
+    dp.add_handler(CommandHandler("starts", starts))
+    reg_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
+        states={
+            NAME: [
+                MessageHandler(Filters.text & ~Filters.command, get_name),
+                MessageHandler(Filters.regex("^Відміна$"), cancel)
+            ],
+            PHONE: [
+                MessageHandler(Filters.contact | (Filters.text & ~Filters.command), get_phone),
+                MessageHandler(Filters.regex("^Відміна$"), cancel)
+            ],
+            USERNAME: [
+                MessageHandler(Filters.text & ~Filters.command, get_username),
+                MessageHandler(Filters.regex("^Відміна$"), cancel)
+            ],
+            SOURCE: [
+                MessageHandler(Filters.text & ~Filters.command, get_source),
+                MessageHandler(Filters.regex("^Відміна$"), cancel)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    dp.add_handler(reg_conv_handler)
+    dp.add_handler(CommandHandler("admin", admin))
+    admin_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_callback, pattern="^(admin_change|admin_broadcast|admin_edit_message)$")],
+        states={
+            ADMIN_DATE: [MessageHandler(Filters.text & ~Filters.command, admin_set_date)],
+            ADMIN_TIME: [MessageHandler(Filters.text & ~Filters.command, admin_set_time)],
+            ADMIN_LOCATION: [MessageHandler(Filters.text & ~Filters.command, admin_set_location)],
+            ADMIN_BROADCAST: [MessageHandler(Filters.text & ~Filters.command, admin_broadcast_message)],
+            ADMIN_EDIT_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_set_message)],
+        },
+        fallbacks=[CommandHandler("cancel", admin_cancel)],
+    )
+    dp.add_handler(admin_conv_handler)
+    dp.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
+    dp.add_error_handler(error_handler)
 
-    app.run(host="0.0.0.0", port=port)
+    # Запуск long polling
+    updater.start_polling()
+    logger.info("Бот запущено у режимі long polling!")
+    updater.idle()
 
 if __name__ == "__main__":
     main()
