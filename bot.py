@@ -6,6 +6,9 @@ import logging
 import datetime
 import re
 import gspread
+from threading import Thread
+from flask import Flask
+
 from telegram import (
     Update,
     Bot,
@@ -168,12 +171,8 @@ def store_registration(user_data: dict):
             worksheet = sh.worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
             worksheet = sh.add_worksheet(title=sheet_name, rows="100", cols="20")
-            # Оновлюємо заголовок, тепер маємо 5 стовпців
             worksheet.append_row(["Ім'я", "Телефон", "Telegram", "Джерело", "Час реєстрації"])
-
-        # Додаємо дату і час у форматі "ГГ:ХХ\nДД.ММ.РРРР"
         registration_time = datetime.datetime.now().strftime("%H:%M\n%d.%m.%Y")
-
         worksheet.append_row([
             user_data.get("name"),
             user_data.get("phone"),
@@ -236,10 +235,8 @@ def start_command(update: Update, context: CallbackContext):
 
 def starts(update: Update, context: CallbackContext):
     add_user(update.effective_chat.id)
-    # Видаляємо клавіатуру (але саме повідомлення не видаляємо)
     msg = update.message.reply_text("\u2063", reply_markup=ReplyKeyboardRemove())
     context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg.message_id)
-
     text = get_invitation_message()
     keyboard = [
         [
@@ -254,13 +251,13 @@ def invitation_response(update: Update, context: CallbackContext):
     """
     Обробка натискання кнопок «Так» або «Ні» на запрошення.
     Якщо «Так» – надсилається повідомлення з текстом реєстрації (який можна редагувати)
-    з інлайн-кнопкою «Реєстрація».
+    з інлайн-кнопкою «Почати реєстрацію».
     """
     query = update.callback_query
     query.answer()
     if query.data == "yes":
         message_text = load_message_text()
-        keyboard = [[InlineKeyboardButton("Реєстрація", callback_data="register")]]
+        keyboard = [[InlineKeyboardButton("Почати реєстрацію", callback_data="register")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         context.bot.send_message(chat_id=update.effective_chat.id, text=message_text, reply_markup=reply_markup)
         return ConversationHandler.END
@@ -289,9 +286,8 @@ def back_handler(update: Update, context: CallbackContext):
 
 def registration_start(update: Update, context: CallbackContext):
     """
-    Запускає процес реєстрації після натискання кнопки «Реєстрація».
-    Нове повідомлення з проханням ввести ім'я надсилається окремо,
-    а оригінальне повідомлення із запрошенням залишається незмінним.
+    Запускає процес реєстрації після натискання кнопки «Почати реєстрацію».
+    Оригінальне повідомлення із запрошенням залишається незмінним.
     """
     query = update.callback_query
     query.answer()
@@ -307,11 +303,7 @@ def get_name(update: Update, context: CallbackContext):
         return cancel(update, context)
     context.user_data["name"] = user_text
     contact_button = KeyboardButton("Поділитись контактом", request_contact=True)
-    reply_markup = ReplyKeyboardMarkup(
-        [[contact_button], ["Відміна"]],
-        one_time_keyboard=False,
-        resize_keyboard=True
-    )
+    reply_markup = ReplyKeyboardMarkup([[contact_button], ["Відміна"]], one_time_keyboard=False, resize_keyboard=True)
     update.message.reply_text("Введіть номер телефону або поділіться контактом:", reply_markup=reply_markup)
     return PHONE
 
@@ -322,16 +314,13 @@ def get_phone(update: Update, context: CallbackContext):
         phone = update.message.text.strip()
         if phone.lower() == "відміна":
             return cancel(update, context)
-
     phone = re.sub(r"[^\d+]", "", phone)
     if not phone.startswith("+"):
         phone = "+" + phone
     logger.info("Очищений номер телефону: %s", phone)
-
     if not (phone.startswith("+380") and len(phone) == 13 and phone[1:].isdigit()):
         update.message.reply_text("Будь ласка, введіть коректний номер телефону у форматі +380XXXXXXXXX.")
         return PHONE
-
     context.user_data["phone"] = phone
     reply_markup = ReplyKeyboardMarkup([["Відміна"]], one_time_keyboard=False, resize_keyboard=True)
     update.message.reply_text("Введіть ваш Telegram нік (через @):", reply_markup=reply_markup)
@@ -344,12 +333,10 @@ def get_username(update: Update, context: CallbackContext):
     if not username.startswith("@"):
         update.message.reply_text("Будь ласка, введіть ваш Telegram нік, який починається з @.")
         return USERNAME
-
     context.user_data["username"] = username
     reply_markup = ReplyKeyboardMarkup([["Відміна"]], one_time_keyboard=False, resize_keyboard=True)
     update.message.reply_text(
-        "Де ви побачили інформацію про вечірку?\n"
-        "(наприклад: інстаграм реклама, інстаграм сторінка, телеграм канал Холі, інший телеграм канал)",
+        "Де ви побачили інформацію про вечірку?\n(наприклад: інстаграм реклама, інстаграм сторінка, телеграм канал Холі, інший телеграм канал)",
         reply_markup=reply_markup
     )
     return SOURCE
@@ -359,14 +346,11 @@ def get_source(update: Update, context: CallbackContext):
     if source_text.lower() == "відміна":
         return cancel(update, context)
     context.user_data["source"] = source_text
-
-    # Зберігаємо всі дані реєстрації
     store_registration(context.user_data)
     update.message.reply_text(
         "Дякуємо за реєстрацію, чекаємо вас на вході для перевірки інформації 🫶🏻",
         reply_markup=ReplyKeyboardRemove()
     )
-
     social_text = (
         "Залишайся з ботом до самої вечірки, адже через нього тобі будуть надходити важливі повідомлення!\n\n"
         "Підпишись на наші соціальні мережі та будь в курсі новин 👇🏻"
@@ -471,14 +455,12 @@ def main():
     # Хендлери для користувача
     dp.add_handler(CommandHandler("start", start_command))
     dp.add_handler(CommandHandler("starts", starts))
-    # Обробка кнопок "Так" та "Ні" на запрошення
     invitation_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(invitation_response, pattern="^(yes|no)$")],
         states={},
         fallbacks=[CommandHandler("cancel", cancel)]
     )
     dp.add_handler(invitation_conv_handler)
-    # Хендлер для запуску реєстрації після натискання кнопки "Реєстрація"
     reg_conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(registration_start, pattern="^register$")],
         states={
@@ -512,7 +494,7 @@ def main():
             ADMIN_BROADCAST: [MessageHandler(Filters.text & ~Filters.command, admin_broadcast_message)],
             ADMIN_EDIT_MESSAGE: [MessageHandler(Filters.text & ~Filters.command, admin_set_message)],
         },
-        fallbacks=[CommandHandler("cancel", admin_cancel)],
+        fallbacks=[CommandHandler("cancel", admin_cancel)]
     )
     dp.add_handler(admin_conv_handler)
     dp.add_handler(CallbackQueryHandler(back_handler, pattern="^back$"))
@@ -521,6 +503,15 @@ def main():
     # Запуск long polling
     updater.start_polling()
     logger.info("Бот запущено у режимі long polling!")
+
+    # Мінімальний HTTP-сервер для Render
+    app = Flask(__name__)
+    @app.route("/")
+    def index():
+        return "OK", 200
+    port = int(os.environ.get("PORT", 10000))
+    Thread(target=lambda: app.run(host="0.0.0.0", port=port)).start()
+
     updater.idle()
 
 if __name__ == "__main__":
